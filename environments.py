@@ -1,17 +1,19 @@
 from logging import ERROR
 from typing import List, Tuple
+import os
 
-import d4rl
-import gym
+# import d4rl
+import gymnasium as gym
 from gym.spaces import Box, Space
 import numpy as np
 import torch
 from torch import Tensor
 from tqdm import tqdm
+import pickle
 
 from memory import ReplayMemory
 
-gym.logger.set_level(ERROR)  # Ignore warnings from Gym logger
+# gym.logger.set_level(ERROR)  # Ignore warnings from Gym logger
 
 
 ENVS = ['ant', 'halfcheetah', 'hopper', 'walker2d']  # Supported envs
@@ -19,25 +21,32 @@ ENVS = ['ant', 'halfcheetah', 'hopper', 'walker2d']  # Supported envs
 
 class D4RLEnv():
   def __init__(self, env_name: str, absorbing: bool, load_data: bool=False):
-    self.env = gym.make(f'{env_name}-expert-v2')
-    if load_data: self.dataset = self.env.get_dataset()  # Load dataset before (potentially) adjusting observation_space (fails assertion check otherwise)
+    # self.env = gym.make(f'{env_name}-expert-v2')
+    self.env = gym.make(f'{env_name}')
+    self.env = self.env.unwrapped
+    # if load_data: 
+      # self.dataset = self.get_dataset()  # Load dataset before (potentially) adjusting observation_space (fails assertion check otherwise)
     self.env.action_space.high, self.env.action_space.low = torch.as_tensor(self.env.action_space.high), torch.as_tensor(self.env.action_space.low)  # Convert action space for action clipping
 
     self.absorbing = absorbing
-    if absorbing: self.env.observation_space = Box(low=np.concatenate([self.env.observation_space.low, np.zeros(1)]), high=np.concatenate([self.env.observation_space.high, np.ones(1)]))  # Append absorbing indicator bit to state dimension (assumes 1D state space)
+    if absorbing: 
+      self.env.observation_space = Box(low=np.concatenate([self.env.observation_space.low, np.zeros(1)]), high=np.concatenate([self.env.observation_space.high, np.ones(1)]))  # Append absorbing indicator bit to state dimension (assumes 1D state space)
 
   def reset(self) -> Tensor:
     state = self.env.reset()
-    state = torch.tensor(state, dtype=torch.float32).unsqueeze(dim=0)  # Add batch dimension to state
-    if self.absorbing: state = torch.cat([state, torch.zeros(state.size(0), 1)], dim=1)  # Add absorbing indicator (zero) to state
+    state = torch.tensor(state, dtype=torch.float32)#.unsqueeze(dim=0)  # Add batch dimension to state
+    if self.absorbing: 
+      state = torch.cat([state, torch.zeros(state.size(0), 1)], dim=1)  # Add absorbing indicator (zero) to state
     return state 
 
   def step(self, action: Tensor) -> Tuple[Tensor, float, bool]:
     action = action.clamp(min=self.env.action_space.low, max=self.env.action_space.high)  # Clip actions
-    state, reward, terminal, _ = self.env.step(action[0].detach().numpy())  # Remove batch dimension from action
-    state = torch.tensor(state, dtype=torch.float32).unsqueeze(dim=0)  # Add batch dimension to state
-    if self.absorbing: state = torch.cat([state, torch.zeros(state.size(0), 1)], dim=1)  # Add absorbing indicator (zero) to state (absorbing state rewriting done in replay memory)
-    return state, reward, terminal
+    state, reward, terminated, truncation, _ = self.env.step(action.detach().numpy()) #self.env.step(action[0].detach().numpy())  # Remove batch dimension from action
+    state = torch.tensor(state, dtype=torch.float32)#.unsqueeze(dim=0)  # Add batch dimension to state
+    terminated = torch.tensor(terminated, dtype=torch.int32)
+    if self.absorbing: 
+      state = torch.cat([state, torch.zeros(state.size(0), 1)], dim=1)  # Add absorbing indicator (zero) to state (absorbing state rewriting done in replay memory)
+    return state, reward, terminated, truncation
 
   def seed(self, seed: int) -> List[int]:
     return self.env.seed(seed)
@@ -58,9 +67,42 @@ class D4RLEnv():
 
   @property
   def max_episode_steps(self) -> int:
-    return self.env._max_episode_steps
+    return self.env.max_episode_steps
+  
+  def get_demo(self, demo_path, verbose=0):
+    """
+    Extract demo from pickled file
+    """
+    self.dataset = {}
+    self.dataset["observations"] = []
+    self.dataset["next_observations"] = []
+    self.dataset["actions"] = []
+    self.dataset["terminals"] = []
+    self.dataset["timeouts"] = []
+
+    assert os.path.isfile(demo_path)
+
+    with open(demo_path, "rb") as f:
+      demo = pickle.load(f)
+      print("demo.keys() = ", demo.keys())
+
+    for obs, full_state, action in zip(demo["observations"], demo["full_states"], demo["actions"]):
+      self.dataset["observations"].append(obs)
+      self.dataset["actions"].append(action)
+      self.dataset["terminals"].append(0)
+      self.dataset["timeouts"].append(0)
+
+    self.dataset["next_observations"] = self.dataset["observations"][1:]
+    self.dataset["observations"] = self.dataset["observations"][:-1]
+    self.dataset["actions"] = self.dataset["actions"][:-1]
+    self.dataset["terminals"] = self.dataset["terminals"][:-1]
+    self.dataset["terminals"][-1]= 1
+    self.dataset["timeouts"] = self.dataset["timeouts"][:-1]
+
+    return 
 
   def get_dataset(self, trajectories: int=0, subsample: int=1) -> ReplayMemory:
+
     # Extract data
     states = torch.as_tensor(self.dataset['observations'], dtype=torch.float32)
     actions = torch.as_tensor(self.dataset['actions'], dtype=torch.float32)

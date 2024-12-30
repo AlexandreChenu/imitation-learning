@@ -1,12 +1,13 @@
 defaults:
   - _self_
-  - algorithm: SAC
+  - algorithm: PWIL
   - optional optimised_hyperparameters: null
 
 # General options
 seed: 0
-steps: 1000000
-env: ant
+steps: 100000
+env: GMazeDubins-v0
+demo_file: /Users/achenu/Documents/Research/robotics/github_repos/RF_DCIL_XPAG/demos/dubins_convert/1.demo
 # Training/evaluation/logging hyperparameters
 bc_pretraining:
   iterations: 0
@@ -19,8 +20,8 @@ training:
   learning_rate: 0.0003
   weight_decay: 0
 evaluation:
-  interval: 10000
-  episodes: 30
+  interval: 1000
+  episodes: 1
 logging:
   interval: 1000  # 0 to disable; logging too frequently can crash plotting/result in a large metrics file
 # Agent/reinforcement learning hyperparameters
@@ -42,8 +43,8 @@ memory:
 imitation:
   trajectories: 0  # 0 to keep all trajectories; otherwise select number of trajectories
   subsample: 1  # Note that 20 was default in original GAIL implementation
-  state_only: false
-  absorbing: true
+  state_only: true
+  absorbing: false
   mix_expert_data: none
   bc_aux_loss: false
 # Miscellaneous options

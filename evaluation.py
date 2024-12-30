@@ -15,10 +15,10 @@ def evaluate_agent(actor: SoftActor, env: D4RLEnv, num_episodes: int, return_tra
   with torch.inference_mode():
     for _ in range(num_episodes):
       states, actions, rewards = [], [], []
-      state, terminal = env.reset(), False
-      while not terminal:
+      state, terminal, truncated = env.reset(), False, False
+      while not (terminal or truncated):
           action = actor.get_greedy_action(state)  # Take greedy action
-          next_state, reward, terminal = env.step(action)
+          next_state, reward, terminal, truncated = env.step(action)
 
           if return_trajectories:
             states.append(state)
