@@ -144,8 +144,10 @@ class TwinCritic(nn.Module):
 # Constructs the input for the GAIL discriminator
 def make_gail_input(state: Tensor, action: Tensor, next_state: Tensor, terminal: Tensor, actor: SoftActor, reward_shaping: bool, subtract_log_policy: bool) -> Dict[str, Tensor]:
   input = {'state': state, 'action': action}
-  if reward_shaping: input.update({'next_state': next_state, 'terminal': terminal})
-  if subtract_log_policy: input.update({'log_policy': actor.log_prob(state, action)})
+  if reward_shaping: 
+    input.update({'next_state': next_state, 'terminal': terminal})
+  if subtract_log_policy: 
+    input.update({'log_policy': actor.log_prob(state, action)})
   return input
 
 

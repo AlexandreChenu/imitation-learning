@@ -91,7 +91,8 @@ def adversarial_imitation_update(actor: SoftActor, discriminator: GAILDiscrimina
   # Discriminator training objective
   discriminator_optimiser.zero_grad(set_to_none=True)
   if loss_function in ['BCE', 'PUGAIL']:
-    with torch.no_grad(): policy_input, expert_input = make_gail_input(state, action, next_state, terminal, actor, reward_shaping, subtract_log_policy), make_gail_input(expert_state, expert_action, expert_next_state, expert_terminal, actor, reward_shaping, subtract_log_policy)
+    with torch.no_grad(): 
+      policy_input, expert_input = make_gail_input(state, action, next_state, terminal, actor, reward_shaping, subtract_log_policy), make_gail_input(expert_state, expert_action, expert_next_state, expert_terminal, actor, reward_shaping, subtract_log_policy)
     D_policy, D_expert = discriminator(**policy_input), discriminator(**expert_input)
 
     if loss_function == 'BCE':
@@ -106,7 +107,8 @@ def adversarial_imitation_update(actor: SoftActor, discriminator: GAILDiscrimina
     batch_size = state.size(0)
     eps = Beta(torch.full((batch_size, ), float(mixup_alpha)), torch.full((batch_size, ), float(mixup_alpha))).sample()  # Sample ε ∼ Beta(α, α)
     mix_state, mix_action, mix_next_state, mix_terminal, mix_weight = _mix_vars(expert_state, state, eps), _mix_vars(expert_action, action, eps), _mix_vars(expert_next_state, next_state, eps), _mix_vars(expert_terminal, terminal, eps), _mix_vars(expert_weight, weight, eps)  # Create convex combination of expert and policy data
-    with torch.no_grad(): mix_input = make_gail_input(mix_state, mix_action, mix_next_state, mix_terminal, actor, reward_shaping, subtract_log_policy)
+    with torch.no_grad(): 
+      mix_input = make_gail_input(mix_state, mix_action, mix_next_state, mix_terminal, actor, reward_shaping, subtract_log_policy)
     D_mix = discriminator(**mix_input)
 
     mix_loss = eps * F.binary_cross_entropy_with_logits(D_mix, torch.ones_like(D_mix), weight=mix_weight, reduction='none') + (1 - eps) * F.binary_cross_entropy_with_logits(D_mix, torch.zeros_like(D_mix), weight=mix_weight, reduction='none') 
@@ -120,9 +122,10 @@ def adversarial_imitation_update(actor: SoftActor, discriminator: GAILDiscrimina
     mix_state, mix_action, mix_next_state, mix_terminal, mix_weight = _mix_vars(expert_state, state, eps), _mix_vars(expert_action, action, eps), _mix_vars(expert_next_state, next_state, eps), _mix_vars(expert_terminal, terminal, eps), _mix_vars(expert_weight, weight, eps)  # Create convex combination of expert and policy data
     mix_state.requires_grad_()
     mix_action.requires_grad_()
-    with torch.no_grad(): mix_input = make_gail_input(mix_state, mix_action, mix_next_state, mix_terminal, actor, reward_shaping, subtract_log_policy)
+    with torch.no_grad(): 
+      mix_input = make_gail_input(mix_state, mix_action, mix_next_state, mix_terminal, actor, reward_shaping, subtract_log_policy)
     D_mix = discriminator(**mix_input)
-    grads = autograd.grad(D_mix, (mix_state, mix_action), torch.ones_like(D_mix), create_graph=True)  # Calculate gradients wrt inputs (does not accumulate parameter gradients)
+    grads = autograd.grad(D_mix, (mix_state, mix_action), torch.ones_like(D_mix), create_graph=True, allow_unused=True)  # Calculate gradients wrt inputs (does not accumulate parameter gradients)
     grad_penalty_loss = grad_penalty * mix_weight * sum([grad.norm(2, dim=1) ** 2 for grad in grads])  # Penalise norm of input gradients (assumes 1D inputs)
     grad_penalty_loss.mean(dim=0).backward()
 

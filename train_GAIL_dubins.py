@@ -20,7 +20,7 @@ from utils import cycle, flatten_list_dicts, lineplot, plot_traj
 # import gym_cassie_run
 import gym_gmazes_dcil
 
-@hydra.main(version_base=None, config_path='conf', config_name='train_config_PWIL_dubins')
+@hydra.main(version_base=None, config_path='conf', config_name='train_config_GAIL_dubins')
 def main(cfg: DictConfig):
   return train(cfg)
 
@@ -71,8 +71,11 @@ def train(cfg: DictConfig, file_prefix: str='') -> float:
   memory = ReplayMemory(cfg.memory.size, state_size, action_size, cfg.imitation.absorbing)
 
   # # Set up imitation learning components
-  discriminator = PWILDiscriminator(state_size, action_size, cfg.imitation, expert_memory, env.max_episode_steps)
+  # discriminator = PWILDiscriminator(state_size, action_size, cfg.imitation, expert_memory, env.max_episode_steps)
+  discriminator = GAILDiscriminator(state_size, action_size, cfg.imitation, cfg.reinforcement.discount)
+  discriminator_optimiser = optim.AdamW(discriminator.parameters(), lr=cfg.imitation.learning_rate, weight_decay=cfg.imitation.weight_decay)
 
+  
   # # Metrics
   metrics = dict(train_steps=[], train_returns=[], test_steps=[], test_returns=[], test_returns_normalized=[], update_steps=[], predicted_rewards=[], alphas=[], entropies=[], Q_values=[])
   score = []  # Score used for hyperparameter optimization 
@@ -87,16 +90,11 @@ def train(cfg: DictConfig, file_prefix: str='') -> float:
       expert_transitions = next(expert_dataloader)
       behavioural_cloning_update(actor, expert_transitions, actor_pretrain_optimiser)
 
-  # Pretraining "discriminators"
-  if cfg.imitation.mix_expert_data != 'none':
-    with torch.inference_mode():
-      for i, transition in tqdm(enumerate(expert_memory), leave=False):
-        expert_memory.rewards[i] = discriminator.compute_reward(transition['states'].unsqueeze(dim=0), transition['actions'].unsqueeze(dim=0))  # Greedily calculate the reward for PWIL for expert data and rewrite memory
-        if transition['terminals'] or transition['timeouts']: discriminator.reset()  # Reset the expert data for PWIL
-  if cfg.imitation.mix_expert_data == 'prefill_memory': memory.transfer_transitions(expert_memory)  # Once rewards have been calculated, transfer expert transitions to agent replay memory
-
   # Training
   t, state, terminal, train_return = 0, env.reset(), False, 0
+
+  discriminator.eval()  # Set the "discriminator" to evaluation mode (except for DRIL, which explicitly uses dropout)
+
   pbar = tqdm(range(1, cfg.steps + 1), unit_scale=1, smoothing=0)
   for step in pbar:
     # Collect set of transitions by running policy π in the environment
@@ -105,8 +103,7 @@ def train(cfg: DictConfig, file_prefix: str='') -> float:
       next_state, reward, terminal, truncated = env.step(action)
       t += 1
       train_return += reward
-      if cfg.algorithm == 'PWIL': 
-        reward = discriminator.compute_reward(state, action)  # Greedily calculate the reward for PWIL
+
       memory.append(step, state, action, reward, next_state, terminal and t != env.max_episode_steps, t == env.max_episode_steps)  # True reward stored for SAC, should be overwritten by IL algorithms; if env terminated due to a time limit then do not count as terminal (store as timeout)
       state = next_state
 
@@ -114,11 +111,10 @@ def train(cfg: DictConfig, file_prefix: str='') -> float:
     if terminal or truncated:  # If terminal (or timed out)
       if cfg.imitation.absorbing and t != env.max_episode_steps: 
         memory.wrap_for_absorbing_states()  # Wrap for absorbing state if terminated without time limit
-      if cfg.algorithm == 'PWIL': 
-        discriminator.reset()  # Reset the expert data for PWIL
+
       # Store metrics and reset environment
       metrics['train_steps'].append(step)
-      metrics['train_returns'].append([train_return])
+      metrics['train_returns'].append(train_return.item())
       pbar.set_description(f'Step: {step} | Return: {train_return}')
       t, state, train_return = 0, env.reset(), 0
 
@@ -127,9 +123,23 @@ def train(cfg: DictConfig, file_prefix: str='') -> float:
       # Sample a batch of transitions
       transitions, expert_transitions = memory.sample(cfg.training.batch_size), expert_memory.sample(cfg.training.batch_size)
 
+      # Train discriminator
+      discriminator.train()
+      adversarial_imitation_update(actor, discriminator, transitions, expert_transitions, discriminator_optimiser, cfg.imitation)
+      discriminator.eval()
+
+      # Optionally, mix expert data into agent data for training
+      if cfg.imitation.mix_expert_data == 'mixed_batch' and cfg.algorithm != 'AdRIL': mix_expert_agent_transitions(transitions, expert_transitions)
+      # Predict rewards
+      states, actions, next_states, terminals, weights = transitions['states'], transitions['actions'], transitions['next_states'], transitions['terminals'], transitions['weights']
+      expert_states, expert_actions, expert_next_states, expert_terminals, expert_weights = expert_transitions['states'], expert_transitions['actions'], expert_transitions['next_states'], expert_transitions['terminals'], expert_transitions['weights']  # Note that using the entire dataset is prohibitively slow in off-policy case (for relevant algorithms)
+
+      with torch.inference_mode():
+        transitions['rewards'] = discriminator.predict_reward(**make_gail_input(states, actions, next_states, terminals, actor, cfg.imitation.discriminator.reward_shaping, cfg.imitation.discriminator.subtract_log_policy))
+
+
       # Perform a behavioural cloning update (optional)
-      if cfg.imitation.bc_aux_loss: 
-        behavioural_cloning_update(actor, expert_transitions, actor_optimiser)
+      if cfg.imitation.bc_aux_loss: behavioural_cloning_update(actor, expert_transitions, actor_optimiser)
       # Perform a SAC update
       log_probs, Q_values = sac_update(actor, critic, log_alpha, target_critic, transitions, actor_optimiser, critic_optimiser, temperature_optimiser, cfg.reinforcement.discount, entropy_target, cfg.reinforcement.polyak_factor)
       # Save auxiliary metrics
@@ -148,17 +158,17 @@ def train(cfg: DictConfig, file_prefix: str='') -> float:
       test_returns_normalized = (np.array(test_returns) - normalization_min) / (normalization_max - normalization_min)
       score.append(np.mean(test_returns_normalized))
       metrics['test_steps'].append(step)
-      metrics['test_returns'].append(list(test_returns))
+      metrics['test_returns'].append(test_returns[0])
       metrics['test_returns_normalized'].append(list(test_returns_normalized))
-      lineplot(metrics['test_steps'], metrics['test_returns'], filename=f"{file_prefix}test_returns", title=f'{cfg.algorithm}: {cfg.env} Test Returns')
-      if len(metrics['train_returns']) > 0:  # Plot train returns if any
-        lineplot(metrics['train_steps'], metrics['train_returns'], filename=f"{file_prefix}train_returns", title=f'Training {cfg.algorithm}: {cfg.env} Train Returns')
-      if cfg.logging.interval > 0 and len(metrics['update_steps']) > 0:
-        if cfg.algorithm != 'SAC': 
-          lineplot(metrics['update_steps'], metrics['predicted_rewards'], filename=f'{file_prefix}predicted_rewards', yaxis='Predicted Reward', title=f'{cfg.algorithm}: {cfg.env} Predicted Rewards')
-        lineplot(metrics['update_steps'], metrics['alphas'], filename=f'{file_prefix}sac_alpha', yaxis='Alpha', title=f'{cfg.algorithm}: {cfg.env} Alpha')
-        lineplot(metrics['update_steps'], metrics['entropies'], filename=f'{file_prefix}sac_entropy', yaxis='Entropy', title=f'{cfg.algorithm}: {cfg.env} Entropy')
-        lineplot(metrics['update_steps'], metrics['Q_values'], filename=f'{file_prefix}Q_values', yaxis='Q-value', title=f'{cfg.algorithm}: {cfg.env} Q-values')
+      # lineplot(metrics['test_steps'], metrics['test_returns'], filename=f"{file_prefix}test_returns", title=f'{cfg.algorithm}: {cfg.env} Test Returns')
+      # if len(metrics['train_returns']) > 0:  # Plot train returns if any
+      #   lineplot(metrics['train_steps'], metrics['train_returns'], filename=f"{file_prefix}train_returns", title=f'Training {cfg.algorithm}: {cfg.env} Train Returns')
+      # if cfg.logging.interval > 0 and len(metrics['update_steps']) > 0:
+      #   if cfg.algorithm != 'SAC': 
+      #     lineplot(metrics['update_steps'], metrics['predicted_rewards'], filename=f'{file_prefix}predicted_rewards', yaxis='Predicted Reward', title=f'{cfg.algorithm}: {cfg.env} Predicted Rewards')
+      #   lineplot(metrics['update_steps'], metrics['alphas'], filename=f'{file_prefix}sac_alpha', yaxis='Alpha', title=f'{cfg.algorithm}: {cfg.env} Alpha')
+      #   lineplot(metrics['update_steps'], metrics['entropies'], filename=f'{file_prefix}sac_entropy', yaxis='Entropy', title=f'{cfg.algorithm}: {cfg.env} Entropy')
+      #   lineplot(metrics['update_steps'], metrics['Q_values'], filename=f'{file_prefix}Q_values', yaxis='Q-value', title=f'{cfg.algorithm}: {cfg.env} Q-values')
 
   if cfg.check_time_usage:
     metrics['training_time'] = time.time() - start_time
@@ -169,7 +179,8 @@ def train(cfg: DictConfig, file_prefix: str='') -> float:
     torch.save(trajectories, f'{file_prefix}trajectories.pth')
   # Save agent and metrics
   torch.save(dict(actor=actor.state_dict(), critic=critic.state_dict(), log_alpha=log_alpha), f'{file_prefix}agent.pth')
-  if cfg.algorithm in ['DRIL', 'GAIL', 'RED']: torch.save(discriminator.state_dict(), f'{file_prefix}discriminator.pth')
+  if cfg.algorithm in ['DRIL', 'GAIL', 'RED']: 
+    torch.save(discriminator.state_dict(), f'{file_prefix}discriminator.pth')
   torch.save(metrics, f'{file_prefix}metrics.pth')
 
   env.close()

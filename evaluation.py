@@ -25,7 +25,7 @@ def evaluate_agent(actor: SoftActor, env: D4RLEnv, num_episodes: int, return_tra
             actions.append(action)
           rewards.append(reward)
           state = next_state
-      returns.append(sum(rewards))
+      returns.append(sum(rewards).item())
 
       if return_trajectories:
         # Collect trajectory data (including terminal signal, which may be needed for offline learning)

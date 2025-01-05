@@ -30,7 +30,7 @@ class D4RLEnv():
 
     self.absorbing = absorbing
     if absorbing: 
-      self.env.observation_space = Box(low=np.concatenate([self.env.observation_space.low, np.zeros(1)]), high=np.concatenate([self.env.observation_space.high, np.ones(1)]))  # Append absorbing indicator bit to state dimension (assumes 1D state space)
+      self.env.observation_space = Box(low=np.concatenate([self.env.observation_space.low, np.zeros((1,1))], axis=1), high=np.concatenate([self.env.observation_space.high, np.ones((1,1))], axis=1))  # Append absorbing indicator bit to state dimension (assumes 1D state space)
 
   def reset(self) -> Tensor:
     state = self.env.reset()
@@ -44,6 +44,7 @@ class D4RLEnv():
     state, reward, terminated, truncation, _ = self.env.step(action.detach().numpy()) #self.env.step(action[0].detach().numpy())  # Remove batch dimension from action
     state = torch.tensor(state, dtype=torch.float32)#.unsqueeze(dim=0)  # Add batch dimension to state
     terminated = torch.tensor(terminated, dtype=torch.int32)
+    reward = torch.tensor(reward, dtype=torch.float32)
     if self.absorbing: 
       state = torch.cat([state, torch.zeros(state.size(0), 1)], dim=1)  # Add absorbing indicator (zero) to state (absorbing state rewriting done in replay memory)
     return state, reward, terminated, truncation
