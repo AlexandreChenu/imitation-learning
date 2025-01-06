@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from environments import D4RLEnv, ENVS
-from evaluation import evaluate_agent
+from evaluation import evaluate_agent_dubins
 from memory import ReplayMemory
 from models import GAILDiscriminator, GMMILDiscriminator, PWILDiscriminator, REDDiscriminator, SoftActor, RewardRelabeller, TwinCritic, create_target_network, make_gail_input, mix_expert_agent_transitions
 from training import adversarial_imitation_update, behavioural_cloning_update, sac_update, target_estimation_update
@@ -152,9 +152,13 @@ def train(cfg: DictConfig, file_prefix: str='') -> float:
 
     # Evaluate agent and plot metrics
     if step % cfg.evaluation.interval == 0 and not cfg.check_time_usage:
-      test_returns, test_trajectories = evaluate_agent(actor, eval_env, cfg.evaluation.episodes, return_trajectories = True)
+      test_returns, test_trajectories, test_max_zone = evaluate_agent_dubins(actor, eval_env, cfg.evaluation.episodes, return_trajectories = True)
       # plot first evaluation trajectory 
       plot_traj(eval_env.env, [], list(test_trajectories[0]["states"].numpy()), file_prefix, it=step)
+
+      with open("f'{file_prefix}max_zone.txt", "a") as max_zone_file: 
+        max_zone_file.write(str(test_max_zone) + "\n")
+
       test_returns_normalized = (np.array(test_returns) - normalization_min) / (normalization_max - normalization_min)
       score.append(np.mean(test_returns_normalized))
       metrics['test_steps'].append(step)

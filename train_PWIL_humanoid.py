@@ -11,16 +11,16 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from environments import D4RLEnv, ENVS
-from evaluation import evaluate_agent_dubins
+from evaluation import evaluate_agent
 from memory import ReplayMemory
 from models import GAILDiscriminator, GMMILDiscriminator, PWILDiscriminator, REDDiscriminator, SoftActor, RewardRelabeller, TwinCritic, create_target_network, make_gail_input, mix_expert_agent_transitions
 from training import adversarial_imitation_update, behavioural_cloning_update, sac_update, target_estimation_update
 from utils import cycle, flatten_list_dicts, lineplot, plot_traj
 
 # import gym_cassie_run
-import gym_gmazes_dcil
+import gym_ghumanoid
 
-@hydra.main(version_base=None, config_path='conf', config_name='train_config_PWIL_dubins')
+@hydra.main(version_base=None, config_path='conf', config_name='train_config_PWIL_humanoid')
 def main(cfg: DictConfig):
   return train(cfg)
 
@@ -142,27 +142,23 @@ def train(cfg: DictConfig, file_prefix: str='') -> float:
 
     # Evaluate agent and plot metrics
     if step % cfg.evaluation.interval == 0 and not cfg.check_time_usage:
-      test_returns, test_trajectories, test_max_zone = evaluate_agent_dubins(actor, eval_env, cfg.evaluation.episodes, return_trajectories = True)
+      test_returns, test_trajectories = evaluate_agent(actor, eval_env, cfg.evaluation.episodes, return_trajectories = True)
       # plot first evaluation trajectory 
       plot_traj(eval_env.env, [], list(test_trajectories[0]["states"].numpy()), file_prefix, it=step)
-
-      with open("f'{file_prefix}max_zone.txt", "a") as max_zone_file: 
-        max_zone_file.write(str(test_max_zone) + "\n")
-        
       test_returns_normalized = (np.array(test_returns) - normalization_min) / (normalization_max - normalization_min)
       score.append(np.mean(test_returns_normalized))
       metrics['test_steps'].append(step)
       metrics['test_returns'].append(list(test_returns))
       metrics['test_returns_normalized'].append(list(test_returns_normalized))
-      # lineplot(metrics['test_steps'], metrics['test_returns'], filename=f"{file_prefix}test_returns", title=f'{cfg.algorithm}: {cfg.env} Test Returns')
-      # if len(metrics['train_returns']) > 0:  # Plot train returns if any
-      #   lineplot(metrics['train_steps'], metrics['train_returns'], filename=f"{file_prefix}train_returns", title=f'Training {cfg.algorithm}: {cfg.env} Train Returns')
-      # if cfg.logging.interval > 0 and len(metrics['update_steps']) > 0:
-      #   if cfg.algorithm != 'SAC': 
-      #     lineplot(metrics['update_steps'], metrics['predicted_rewards'], filename=f'{file_prefix}predicted_rewards', yaxis='Predicted Reward', title=f'{cfg.algorithm}: {cfg.env} Predicted Rewards')
-      #   lineplot(metrics['update_steps'], metrics['alphas'], filename=f'{file_prefix}sac_alpha', yaxis='Alpha', title=f'{cfg.algorithm}: {cfg.env} Alpha')
-      #   lineplot(metrics['update_steps'], metrics['entropies'], filename=f'{file_prefix}sac_entropy', yaxis='Entropy', title=f'{cfg.algorithm}: {cfg.env} Entropy')
-      #   lineplot(metrics['update_steps'], metrics['Q_values'], filename=f'{file_prefix}Q_values', yaxis='Q-value', title=f'{cfg.algorithm}: {cfg.env} Q-values')
+      lineplot(metrics['test_steps'], metrics['test_returns'], filename=f"{file_prefix}test_returns", title=f'{cfg.algorithm}: {cfg.env} Test Returns')
+      if len(metrics['train_returns']) > 0:  # Plot train returns if any
+        lineplot(metrics['train_steps'], metrics['train_returns'], filename=f"{file_prefix}train_returns", title=f'Training {cfg.algorithm}: {cfg.env} Train Returns')
+      if cfg.logging.interval > 0 and len(metrics['update_steps']) > 0:
+        if cfg.algorithm != 'SAC': 
+          lineplot(metrics['update_steps'], metrics['predicted_rewards'], filename=f'{file_prefix}predicted_rewards', yaxis='Predicted Reward', title=f'{cfg.algorithm}: {cfg.env} Predicted Rewards')
+        lineplot(metrics['update_steps'], metrics['alphas'], filename=f'{file_prefix}sac_alpha', yaxis='Alpha', title=f'{cfg.algorithm}: {cfg.env} Alpha')
+        lineplot(metrics['update_steps'], metrics['entropies'], filename=f'{file_prefix}sac_entropy', yaxis='Entropy', title=f'{cfg.algorithm}: {cfg.env} Entropy')
+        lineplot(metrics['update_steps'], metrics['Q_values'], filename=f'{file_prefix}Q_values', yaxis='Q-value', title=f'{cfg.algorithm}: {cfg.env} Q-values')
 
   if cfg.check_time_usage:
     metrics['training_time'] = time.time() - start_time
