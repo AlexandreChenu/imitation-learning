@@ -5,9 +5,9 @@ defaults:
 
 # General options
 seed: 0
-steps: 300000
+steps: 200000
 env: GMazeDubins-v0
-demo_file: /Users/achenu/Documents/Research/robotics/github_repos/RF_DCIL_XPAG/demos/dubins_convert/1.demo
+demo_file: C:\\Users\\alexandre.chenu\\Documents\\sr_dcil\\RF_DCIL_XPAG\\demos\\dubins_convert\\1.demo 
 # Training/evaluation/logging hyperparameters
 bc_pretraining:
   iterations: 0
@@ -56,6 +56,6 @@ hydra:
   job:
     chdir: true  # Change working directory to output directory (default behaviour for Hydra < 1.2)
   run:
-    dir: ./outputs/${algorithm}_${env}/${now:%m-%d_%H-%M-%S}  # Timestamp experiments up to second precision
+    dir: F:\\alexandre.chenu\results\\imitation_baselines\\${algorithm}_${env}_${now:%m-%d_%H-%M-%S}  # Timestamp experiments up to second precision
   sweep:
-    dir: ./outputs/${algorithm}_${env}_sweeper/${now:%m-%d_%H-%M-%S}
+    dir: F:\\alexandre.chenu\\results\\imitation_baselines\\${algorithm}_${env}_sweeper_${now:%m-%d_%H-%M-%S}
